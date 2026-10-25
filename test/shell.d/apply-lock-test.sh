@@ -75,7 +75,7 @@ mkdir -p "$poison_bin" "$trusted_root_bin"
 
 # The runtime copy pins to this isolated root path. It contains every bare
 # command the exercised helper needs, but deliberately no fprintd-list.
-for helper in grep rm tee install rmdir dirname; do
+for helper in grep rm tee install rmdir dirname cat cmp; do
   ln -s "/usr/bin/$helper" "$trusted_root_bin/$helper"
 done
 
@@ -274,6 +274,33 @@ for source in "$hook_source" "$timeout_source"; do
   mv "$source.saved" "$source"
 done
 pass "failed recovery installation cannot create fingerprint PAM"
+
+# A provider or administrator can add a readiness/account policy that the
+# generic helper must neither replace on a match nor erase on an empty probe.
+run_as_root "$patched_helper" "restore default enrollment before custom policy"
+printf 'auth requisite pam_exec.so quiet /usr/lib/example/ready\n' >>"$fingerprint_pam"
+printf 'account required pam_access.so\n' >>"$password_pam"
+printf '# custom recovery\n' >"$test_tmp/system-sleep/fprintd-resume"
+cp "$fingerprint_pam" "$test_tmp/custom-fingerprint"
+cp "$password_pam" "$test_tmp/custom-password"
+for result in ' - #0: right-index-finger' 'User alice has no fingers enrolled' 'Could not activate remote peer'; do
+  TEST_FPRINTD_OUTPUT="$result" run_as_root "$patched_helper" "custom authentication survives the probe"
+  cmp -s "$fingerprint_pam" "$test_tmp/custom-fingerprint" || fail "keeps custom fingerprint requirements"
+  cmp -s "$password_pam" "$test_tmp/custom-password" || fail "keeps custom password requirements"
+  [[ $(<"$test_tmp/system-sleep/fprintd-resume") == '# custom recovery' ]] || fail "keeps custom recovery beside custom authentication"
+done
+pass "custom authentication and recovery survive enrolled, empty and unavailable probes"
+
+# Links are configuration too, and a dangling link must not create its target.
+rm "$fingerprint_pam" "$password_pam"
+cp "$test_tmp/custom-fingerprint" "$test_tmp/link-original"
+ln -s "$test_tmp/custom-fingerprint" "$fingerprint_pam"
+ln -s "$test_tmp/missing-password" "$password_pam"
+run_as_root "$patched_helper" "custom PAM symlinks remain intact"
+[[ -L $fingerprint_pam && -L $password_pam && ! -e $test_tmp/missing-password ]] || fail "does not follow custom PAM links"
+cmp -s "$test_tmp/link-original" "$fingerprint_pam" || fail "linked custom fingerprint policy stays intact"
+pass "PAM links and dangling links are preserved"
+reset_runtime_files
 
 run_as_root "$patched_helper" "restore enrollment before removing fprintd-list"
 rm -f "$trusted_fprintd"

@@ -26,9 +26,20 @@ as_root() {
   fi
 }
 
-echo "Configuring lock screen password authentication..."
+# Existing non-default stacks belong to their administrator or integration.
+# A symlink is also custom, including a dangling one; never follow it to write.
+custom_pam() {
+  local file=$1 expected=$2
+  if [[ ! -e $file && ! -L $file ]]; then
+    return 1
+  elif [[ -L $file || ! -f $file ]]; then
+    return 0
+  else
+    ! cmp -s "$file" <(printf '%s\n' "$expected")
+  fi
+}
 
-as_root tee /etc/pam.d/omarchy-lock-password >/dev/null <<'EOF'
+password_config=$(cat <<'EOF'
 #%PAM-1.0
 auth       required                    pam_faillock.so preauth silent deny=10 unlock_time=120
 -auth      [success=2 default=ignore]  pam_systemd_home.so
@@ -39,6 +50,20 @@ auth       required                    pam_env.so
 auth       required                    pam_faillock.so authsucc
 account    include                     system-local-login
 EOF
+)
+fingerprint_config=$(cat <<'EOF'
+#%PAM-1.0
+auth       required                    pam_fprintd.so
+account    include                     system-local-login
+EOF
+)
+
+if custom_pam /etc/pam.d/omarchy-lock-password "$password_config"; then
+  echo "Keeping custom lock screen password authentication."
+else
+  echo "Configuring lock screen password authentication..."
+  printf '%s\n' "$password_config" | as_root tee /etc/pam.d/omarchy-lock-password >/dev/null
+fi
 
 # Install resume recovery alongside fingerprint PAM, so setup and upgrades
 # cannot leave one configured without the other.
@@ -54,16 +79,14 @@ else
   fingerprint_status="no"
 fi
 
-if grep -qE '^[[:space:]]*-[[:space:]]*#[0-9]+:' <<< "$fingerprint_status"; then
+if custom_pam /etc/pam.d/omarchy-lock-fingerprint "$fingerprint_config"; then
+  echo "Keeping custom lock screen fingerprint authentication and recovery configuration."
+elif grep -qE '^[[:space:]]*-[[:space:]]*#[0-9]+:' <<< "$fingerprint_status"; then
   echo "Configuring lock screen fingerprint authentication..."
   as_root install -Dm755 -o root -g root "$resume_hook_src" "$resume_hook_dst"
   as_root install -Dm644 -o root -g root "$stop_timeout_src" "$stop_timeout_dst"
   as_root systemctl daemon-reload
-  as_root tee /etc/pam.d/omarchy-lock-fingerprint >/dev/null <<'EOF'
-#%PAM-1.0
-auth       required                    pam_fprintd.so
-account    include                     system-local-login
-EOF
+  printf '%s\n' "$fingerprint_config" | as_root tee /etc/pam.d/omarchy-lock-fingerprint >/dev/null
 elif [[ $fingerprint_status == "no" ]] || grep -qi 'has no fingers enrolled' <<< "$fingerprint_status"; then
   as_root rm -f /etc/pam.d/omarchy-lock-fingerprint "$resume_hook_dst"
   # Only reload when something was there: this branch also runs in the
