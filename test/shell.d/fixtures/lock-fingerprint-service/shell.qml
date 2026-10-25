@@ -45,29 +45,31 @@ ShellRoot {
       var recheck = timer(service, 1000, false)
       service.lockRequested = true
 
-      service.applyFingerprintProbe("Could not activate remote peer")
+      service.applyFingerprintProbe("Could not activate remote peer", 0)
       check(!service.fingerprintConfigured, "unknown cannot invent an enrollment")
       check(recheck.running && recheck.interval === 1000, "unknown schedules a paced probe")
 
-      service.applyFingerprintProbe("Could not activate remote peer")
-      service.applyFingerprintProbe("No devices available")
+      service.applyFingerprintProbe("Could not activate remote peer", 0)
+      service.applyFingerprintProbe("No devices available", 0)
       check(!service.fingerprintConfigured && service.fingerprintUnavailable, "an initial outage shows unavailable without inventing enrollment")
       service.nudgeFingerprint()
       check(recheck.interval === 250, "input promptly retries an initial unknown probe")
 
-      service.applyFingerprintProbe("Fingerprints for user test on Goodix:\n - #0: right-index-finger")
+      service.applyFingerprintProbe("Fingerprints for user test on Goodix:\n - #0: right-index-finger", 0)
       check(service.fingerprintConfigured, "a real enrollment row enables fingerprint")
+      service.applyFingerprintProbe("User test has no fingers enrolled.", 1)
+      check(service.fingerprintConfigured, "a failed probe cannot discard the known enrollment")
       check(!service.fingerprintUnavailable && !recheck.running, "a definitive enrollment clears probe notice and recheck")
-      service.applyFingerprintProbe("ListEnrolledFingers failed: Timeout was reached")
+      service.applyFingerprintProbe("ListEnrolledFingers failed: Timeout was reached", 0)
       check(service.fingerprintConfigured, "unknown preserves a known enrollment")
-      service.applyFingerprintProbe("No devices available")
-      service.applyFingerprintProbe("ListEnrolledFingers failed: Timeout was reached")
+      service.applyFingerprintProbe("No devices available", 0)
+      service.applyFingerprintProbe("ListEnrolledFingers failed: Timeout was reached", 0)
       check(!service.fingerprintUnavailable && !recheck.running, "known enrollment uses PAM recovery without competing probe retries")
 
       service.fingerprintAuthenticating = true
       retry.start()
       reach.start()
-      service.applyFingerprintProbe("User test has no fingers enrolled for Goodix MOC Fingerprint Sensor.")
+      service.applyFingerprintProbe("User test has no fingers enrolled for Goodix MOC Fingerprint Sensor.", 0)
       check(!service.fingerprintConfigured, "empty enrollment is not a fingerprint")
       check(!retry.running, "empty enrollment stops authentication retries")
       check(!service.fingerprintAuthenticating && !reach.running, "empty enrollment closes the attempt and reach timer")
@@ -235,7 +237,7 @@ ShellRoot {
       service.resetAuthenticationState()
       check(!retry.running && !reach.running && !recheck.running, "unlock reset stops every fingerprint timer")
       check(!service.fingerprintPaused, "unlock reset clears a pause so the next lock starts the reader")
-      service.applyFingerprintProbe("Daemon is restarting")
+      service.applyFingerprintProbe("Daemon is restarting", 0)
       check(!recheck.running, "an unknown probe outside the lock cannot restart it")
     } finally {
       service.lockRequested = false
