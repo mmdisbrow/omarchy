@@ -140,6 +140,13 @@ Item {
 
       TextInput {
         id: passwordInput
+        objectName: "passwordInput"
+        Accessible.role: Accessible.EditableText
+        Accessible.name: root.placeholderText
+        // Qt suppresses a protected edit's accessible name, so its description
+        // carries the label and feedback without ever including entered text.
+        Accessible.description: root.authenticatingPassword ? Commons.I18n.t("lock.checking") : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
+        Accessible.passwordEdit: true
         anchors.fill: parent
         anchors.topMargin: inputField.borderTop
         // Reserve the fingerprint icon's width on both sides so the centered
@@ -197,14 +204,16 @@ Item {
       }
 
       Text {
+        objectName: "authenticationIndicator"
         textFormat: Text.PlainText
         anchors.fill: passwordInput
-        text: root.authenticatingPassword ? Commons.I18n.t("lock.checking") : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
+        text: root.authenticatingPassword ? "" : (root.failureMessage.length > 0 ? "" : "")
+        Accessible.role: Accessible.StaticText
+        Accessible.name: root.authenticatingPassword ? Commons.I18n.t("lock.checking") : (root.failureMessage.length > 0 ? root.failureMessage : root.placeholderText)
         visible: passwordInput.text.length === 0
         color: root.authenticatingPassword ? Commons.Color.lock.text : (root.failureMessage.length > 0 ? Commons.Color.lock.textError : Commons.Color.lock.placeholder)
         font.family: Style.font.family
         font.pixelSize: root.fieldFontSize
-        font.italic: !root.authenticatingPassword && root.failureMessage.length > 0
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
         elide: Text.ElideRight
@@ -224,30 +233,14 @@ Item {
         anchors.verticalCenter: parent.verticalCenter
         visible: root.fingerprintConfigured
         text: root.fingerprintUnavailable ? "󰺱" : "󰈷"
+        Accessible.role: Accessible.StaticText
+        Accessible.name: root.fingerprintUnavailable ? Commons.I18n.t("lock.fingerprintUnavailable") : Commons.I18n.t("lock.fingerprintAvailable")
         color: root.fingerprintUnavailable ? Commons.Color.lock.textError : Commons.Color.lock.placeholder
         font.family: Style.font.family
         font.pixelSize: Math.round(root.fieldFontSize * 1.1)
         horizontalAlignment: Text.AlignHCenter
         verticalAlignment: Text.AlignVCenter
       }
-    }
-
-    // The crossed-out icon has no meaning to a user who has never seen it — it
-    // is not intuitive that it signals a broken reader — so the words carry the
-    // explanation and the icon only reinforces it.
-    Text {
-      objectName: "fingerprintUnavailableNotice"
-      textFormat: Text.PlainText
-      anchors.top: inputField.bottom
-      anchors.topMargin: 18
-      anchors.horizontalCenter: inputField.horizontalCenter
-      visible: root.fingerprintConfigured && root.fingerprintUnavailable
-      text: Commons.I18n.t("lock.fingerprintUnavailable")
-      color: Commons.Color.lock.textError
-      font.family: Style.font.family
-      font.pixelSize: Style.font.heading
-      font.italic: true
-      horizontalAlignment: Text.AlignHCenter
     }
   }
 }
