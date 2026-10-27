@@ -128,7 +128,7 @@ Rectangle {
         width: 36
         height: 38
         anchors.verticalCenter: parent.verticalCenter
-        visible: root.parallelAvailable
+        visible: root.parallelAvailable && root.fingerprintActive
         text: "󰈷"
         font.family: "JetBrainsMono Nerd Font"
         font.pixelSize: 29

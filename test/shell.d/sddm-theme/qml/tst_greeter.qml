@@ -227,11 +227,16 @@ TestCase {
 
   function test_reader_indicator_describes_actual_activity() {
     initialScan()
+    verify(!indicator().visible)
     compare(indicator().Accessible.name, "Fingerprint reader inactive")
+    input().text = "typed-before-reader-ready"
     modern.fingerprintActiveChanged(true)
+    verify(indicator().visible)
+    compare(input().text, "typed-before-reader-ready")
     compare(indicator().Accessible.name, "Fingerprint reader active")
     compare(indicator().opacity, 1)
     modern.fingerprintActiveChanged(false)
+    verify(!indicator().visible)
     compare(indicator().Accessible.name, "Fingerprint reader inactive")
     verify(indicator().opacity < 1)
   }
