@@ -29,6 +29,77 @@ if grep -F 'omarchy-cmd-present fprintd-list' "$apply_lock" >/dev/null ||
 fi
 pass "the lock helper pins fprintd-list to its packaged system path"
 
+# Model an unprivileged caller whose privileged probe can traverse PAM's parent.
+if (( EUID != 0 )); then
+  python3 - "$apply_lock" "$ROOT" <<'PYCODE'
+import os, pathlib, subprocess, sys, tempfile
+source = pathlib.Path(sys.argv[1]).read_text()
+with tempfile.TemporaryDirectory(prefix="pam-protected-") as tmp:
+    root = pathlib.Path(tmp); protected = root / "protected"; protected.mkdir()
+    password = protected / "password"; finger = protected / "fingerprint"
+    bindir = root / "bin"; bindir.mkdir()
+    sudo = bindir / "sudo"
+    sudo.write_text("""#!/bin/bash
+chmod 700 "$PROTECTED_DIR"
+if [[ -e $SUDO_FAIL_ONCE ]]; then rm "$SUDO_FAIL_ONCE"; chmod 000 "$PROTECTED_DIR"; exit 1; fi
+if [[ $1 == systemctl ]]; then exit_code=0
+elif [[ $1 == install && $3 == -o && $5 == -g ]]; then /usr/bin/install "$2" "$7" "$8"; exit_code=$?
+else "$@"; exit_code=$?; fi
+chmod 000 "$PROTECTED_DIR"
+exit "$exit_code"
+""")
+    sudo.chmod(0o755)
+    probe = root / "fprintd-list"
+    probe.write_text('#!/bin/bash\nprintf "%s\\n" "$TEST_RESULT"\n'); probe.chmod(0o755)
+    replacements = {
+        "/etc/pam.d/omarchy-lock-password": str(password),
+        "/etc/pam.d/omarchy-lock-fingerprint": str(finger),
+        "/usr/bin/fprintd-list": str(probe),
+        "/usr/lib/systemd/system-sleep/fprintd-resume": str(root / "resume"),
+        "/etc/systemd/system/fprintd.service.d/10-stop-timeout.conf": str(root / "timeout"),
+        "if omarchy-shell lock status >/dev/null 2>&1; then": "if false; then",
+    }
+    for old, new in replacements.items():
+        assert old in source
+        source = source.replace(old, new)
+    script = root / "apply"; script.write_text(source)
+    env = dict(os.environ, PATH=str(bindir) + os.pathsep + os.environ["PATH"],
+               OMARCHY_PATH=sys.argv[2], PROTECTED_DIR=str(protected), SUDO_FAIL_ONCE=str(root / "fail-once"))
+    password.write_text("auth required pam_deny.so\n")
+    finger.write_text("auth required pam_exec.so /custom/gate\n")
+    before = (password.read_bytes(), finger.read_bytes())
+    (root / "fail-once").touch()
+    os.chmod(protected, 0)
+    try:
+        run = subprocess.run(["/bin/bash", str(script)], env=dict(env, TEST_RESULT=" - #0: finger"), capture_output=True, text=True)
+    finally:
+        os.chmod(protected, 0o700)
+    assert run.returncode != 0 and (password.read_bytes(), finger.read_bytes()) == before
+
+    for result in (" - #0: right-index-finger", "User x has no fingers enrolled"):
+        password.write_text("auth required pam_deny.so\n")
+        finger.write_text("auth required pam_exec.so /custom/gate\n")
+        before = (password.read_bytes(), finger.read_bytes())
+        os.chmod(protected, 0)
+        try:
+            run = subprocess.run(["/bin/bash", str(script)], env=dict(env, TEST_RESULT=result), capture_output=True, text=True)
+        finally:
+            os.chmod(protected, 0o700)
+        assert run.returncode == 0, run.stderr
+        assert (password.read_bytes(), finger.read_bytes()) == before
+        finger.unlink(); finger.symlink_to(root / "missing")
+        os.chmod(protected, 0)
+        try:
+            run = subprocess.run(["/bin/bash", str(script)], env=dict(env, TEST_RESULT=result), capture_output=True, text=True)
+        finally:
+            os.chmod(protected, 0o700)
+        assert run.returncode == 0, run.stderr
+        assert finger.is_symlink() and not (root / "missing").exists()
+        finger.unlink()
+PYCODE
+  pass "protected custom PAM policies and symlinks survive enrollment and removal"
+fi
+
 # Exercise the helper as real root when the suite already has it, or as root in
 # an unprivileged user namespace otherwise. A hardened kernel can disable user
 # namespaces, so preserve the static coverage above and skip only this probe.
@@ -75,7 +146,7 @@ mkdir -p "$poison_bin" "$trusted_root_bin"
 
 # The runtime copy pins to this isolated root path. It contains every bare
 # command the exercised helper needs, but deliberately no fprintd-list.
-for helper in grep rm tee install rmdir dirname cat cmp; do
+for helper in grep rm tee install rmdir dirname cat cmp python3; do
   ln -s "/usr/bin/$helper" "$trusted_root_bin/$helper"
 done
 

@@ -29,14 +29,33 @@ as_root() {
 # Existing non-default stacks belong to their administrator or integration.
 # A symlink is also custom, including a dangling one; never follow it to write.
 custom_pam() {
-  local file=$1 expected=$2
-  if [[ ! -e $file && ! -L $file ]]; then
-    return 1
-  elif [[ -L $file || ! -f $file ]]; then
-    return 0
-  else
-    ! cmp -s "$file" <(printf '%s\n' "$expected")
-  fi
+  as_root /usr/bin/python3 -I - "$1" "$2" <<'PYCODE'
+import os
+import stat
+import sys
+
+path, expected = sys.argv[1:]
+try:
+    # An inaccessible or missing parent is an error, not an absent policy.
+    os.stat(os.path.dirname(path))
+    try:
+        info = os.lstat(path)
+    except FileNotFoundError:
+        print("managed")
+        sys.exit(0)
+    if not stat.S_ISREG(info.st_mode):
+        print("custom")
+        sys.exit(0)
+    fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW)
+    with os.fdopen(fd, "rb") as source:
+        current = os.fstat(source.fileno())
+        if (current.st_dev, current.st_ino) != (info.st_dev, info.st_ino):
+            raise OSError("policy changed during inspection")
+        print("managed" if source.read() == (expected + "\n").encode() else "custom")
+except OSError as error:
+    print("Could not inspect lock PAM policy: " + str(error), file=sys.stderr)
+    sys.exit(2)
+PYCODE
 }
 
 password_config=$(cat <<'EOF'
@@ -58,11 +77,18 @@ account    include                     system-local-login
 EOF
 )
 
-if custom_pam /etc/pam.d/omarchy-lock-password "$password_config"; then
+if ! password_policy=$(custom_pam /etc/pam.d/omarchy-lock-password "$password_config"); then
+  echo "Could not inspect password authentication; leaving it unchanged." >&2
+  exit 1
+fi
+if [[ $password_policy == "custom" ]]; then
   echo "Keeping custom lock screen password authentication."
-else
+elif [[ $password_policy == "managed" ]]; then
   echo "Configuring lock screen password authentication..."
   printf '%s\n' "$password_config" | as_root tee /etc/pam.d/omarchy-lock-password >/dev/null
+else
+  echo "Invalid password policy inspection result." >&2
+  exit 1
 fi
 
 # Install resume recovery alongside fingerprint PAM, so setup and upgrades
@@ -79,8 +105,15 @@ else
   fingerprint_status="no"
 fi
 
-if custom_pam /etc/pam.d/omarchy-lock-fingerprint "$fingerprint_config"; then
+if ! fingerprint_policy=$(custom_pam /etc/pam.d/omarchy-lock-fingerprint "$fingerprint_config"); then
+  echo "Could not inspect fingerprint authentication; leaving it unchanged." >&2
+  exit 1
+fi
+if [[ $fingerprint_policy == "custom" ]]; then
   echo "Keeping custom lock screen fingerprint authentication and recovery configuration."
+elif [[ $fingerprint_policy != "managed" ]]; then
+  echo "Invalid fingerprint policy inspection result." >&2
+  exit 1
 elif grep -qE '^[[:space:]]*-[[:space:]]*#[0-9]+:' <<< "$fingerprint_status"; then
   echo "Configuring lock screen fingerprint authentication..."
   as_root install -Dm755 -o root -g root "$resume_hook_src" "$resume_hook_dst"
