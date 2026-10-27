@@ -17,8 +17,51 @@ usb_devices_path="${OMARCHY_USB_DEVICES_PATH:-/sys/bus/usb/devices}"
 # usable (see docs/file-layout.md).
 platform_readers=/usr/share/omarchy-platform/fingerprint-readers
 if [[ -r $platform_readers ]]; then
-  while IFS=$' \t\r' read -r reader_glob reader_value extra || [[ -n $reader_glob ]]; do
-    [[ $reader_glob == /* && -n $reader_value && -z $extra ]] || continue
+  while IFS= read -r reader_line || [[ -n $reader_line ]]; do
+    IFS=$' \t\r' read -r -a reader_fields <<<"$reader_line"
+    ((${#reader_fields[@]} >= 2)) || continue
+    reader_glob=${reader_fields[0]}
+    reader_value=${reader_fields[1]}
+    [[ $reader_glob == /* && -n $reader_value ]] || continue
+    guards_ok=1
+    guard_index=2
+    while ((guard_index < ${#reader_fields[@]})); do
+      guard_token=${reader_fields[guard_index]}
+      if [[ $guard_token == +exists:/* ]]; then
+        guard_glob=${guard_token#+exists:}
+        guard_mode=exists
+        ((guard_index += 1))
+      else
+        if ((guard_index + 1 >= ${#reader_fields[@]})); then
+          guards_ok=0
+          break
+        fi
+        guard_glob=$guard_token
+        guard_value=${reader_fields[guard_index + 1]}
+        guard_mode=value
+        ((guard_index += 2))
+        if [[ $guard_glob != /* || -z $guard_value ]]; then
+          guards_ok=0
+          break
+        fi
+      fi
+      guard_count=0
+      guard_matches=0
+      for guard_file in $guard_glob; do
+        [[ -e $guard_file || -L $guard_file ]] || continue
+        ((guard_count += 1))
+        if [[ $guard_mode == "exists" && -e $guard_file ]]; then
+          guard_matches=1
+        elif [[ $guard_mode == "value" && -r $guard_file && $(<"$guard_file") == "$guard_value" ]]; then
+          guard_matches=1
+        fi
+      done
+      if ((guard_count != 1 || guard_matches != 1)); then
+        guards_ok=0
+        break
+      fi
+    done
+    ((guards_ok == 1)) || continue
     for reader_file in $reader_glob; do
       if [[ -r $reader_file && $(<"$reader_file") == "$reader_value" ]]; then
         exit 0

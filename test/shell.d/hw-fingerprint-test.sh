@@ -146,6 +146,46 @@ write_platform_readers "sep/*.sep/diag/touchid ready" "$tmp_dir/sep/*.sep/diag/t
   "$tmp_dir/sep/*.sep/diag/touchid ready now" "#$tmp_dir/sep/*.sep/diag/touchid ready"
 assert_rejects "relative paths, a missing value, an extra word and comments name no reader"
 
+# A live guard prevents a stale ready status from advertising the reader.
+write_platform_readers "$tmp_dir/sep/*.sep/diag/touchid ready $tmp_dir/sep/*.sep/diag/host_store ready"
+printf 'ready\n' >"$tmp_dir/sep/396400000.sep/diag/host_store"
+assert_detects "a guarded platform reader is detected while host storage is ready"
+printf 'unavailable\n' >"$tmp_dir/sep/396400000.sep/diag/host_store"
+assert_rejects "a poisoned host store suppresses a stale ready status"
+printf 'unknown\n' >"$tmp_dir/sep/396400000.sep/diag/host_store"
+assert_rejects "an unknown guard value cannot advertise readiness"
+rm "$tmp_dir/sep/396400000.sep/diag/host_store"
+assert_rejects "a missing guard cannot advertise readiness"
+printf 'ready\n' >"$tmp_dir/sep/396400000.sep/diag/host_store"
+mkdir -p "$tmp_dir/sep/other.sep/diag"
+printf 'ready\n' >"$tmp_dir/sep/other.sep/diag/host_store"
+assert_rejects "ambiguous multiple guard files cannot advertise readiness"
+rm -rf "$tmp_dir/sep/other.sep"
+
+printf 'usable\n' >"$tmp_dir/sep/396400000.sep/diag/matching"
+printf 'enabled\n' >"$tmp_dir/sep/396400000.sep/diag/xart"
+write_platform_readers "$tmp_dir/sep/*.sep/diag/touchid ready $tmp_dir/sep/*.sep/diag/host_store ready $tmp_dir/sep/*.sep/diag/matching usable $tmp_dir/sep/*.sep/diag/xart enabled"
+assert_detects "all live guard conditions permit the cached reader"
+printf 'blocked\n' >"$tmp_dir/sep/396400000.sep/diag/matching"
+assert_rejects "one failed guard prevents cached readiness"
+printf 'usable\n' >"$tmp_dir/sep/396400000.sep/diag/matching"
+printf 'disabled\n' >"$tmp_dir/sep/396400000.sep/diag/xart"
+assert_rejects "a later failed guard prevents cached readiness"
+printf 'enabled\n' >"$tmp_dir/sep/396400000.sep/diag/xart"
+assert_detects "reader detection recovers once all guards recover"
+write_platform_readers "$tmp_dir/sep/*.sep/diag/touchid ready $tmp_dir/sep/*.sep/diag/host_store ready $tmp_dir/sep/*.sep/diag/matching"
+assert_rejects "an incomplete additional guard is rejected"
+write_platform_readers "$tmp_dir/sep/*.sep/diag/touchid ready +exists:$tmp_dir/sensor-node"
+assert_rejects "a missing existence guard prevents detection"
+mkfifo "$tmp_dir/sensor-node"
+timeout 2 env OMARCHY_USB_DEVICES_PATH="$tmp_dir/devices" "$tmp_dir/bin/omarchy-hw-fingerprint" ||
+  fail "a FIFO existence guard is checked without opening it"
+rm "$tmp_dir/sensor-node"
+ln -s "$tmp_dir/absent-target" "$tmp_dir/sensor-node"
+assert_rejects "a dangling existence guard is unavailable"
+rm "$tmp_dir/sensor-node"
+pass "existence guards never open device-like paths"
+
 # A platform file that matches nothing never hides a USB reader on the same
 # machine: the USB scan still runs after it.
 write_usb_devices '1234:5678:Goodix Fingerprint USB Device'
