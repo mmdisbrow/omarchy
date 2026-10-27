@@ -186,6 +186,48 @@ assert_rejects "a dangling existence guard is unavailable"
 rm "$tmp_dir/sensor-node"
 pass "existence guards never open device-like paths"
 
+# Value reads must reject blocking/malformed input and still reach USB fallback.
+guard="$tmp_dir/value-guard"
+write_sep 396400000 ready
+write_platform_readers "$tmp_dir/sep/*.sep/diag/touchid ready $guard ready"
+bounded_detection() {
+  timeout 2 env OMARCHY_USB_DEVICES_PATH="$tmp_dir/devices" "$tmp_dir/bin/omarchy-hw-fingerprint"
+}
+for value_case in fifo oversized nul; do
+  rm -f "$guard"
+  case $value_case in
+  fifo) mkfifo "$guard" ;;
+  oversized) { printf ready; printf '\n%.0s' {1..300}; } >"$guard" ;;
+  nul) printf 'ready\0\n' >"$guard" ;;
+  esac
+  write_usb_devices '1234:5678:Generic USB Device'
+  status=0
+  bounded_detection || status=$?
+  (( status == 1 )) || fail "$value_case guard rejects promptly without a reader" "$status"
+  write_usb_devices '27c6:1234'
+  bounded_detection || fail "$value_case guard preserves USB detection"
+done
+rm "$guard"
+printf 'ready\n' >"$guard"
+export BLOCKED_VALUE="$guard" REAL_HEAD="$(command -v head)"
+cat >"$tmp_dir/bin/head" <<'STUB'
+#!/bin/bash
+if [[ ${!#} == "$BLOCKED_VALUE" ]]; then
+  exec sleep 10
+fi
+exec "$REAL_HEAD" "$@"
+STUB
+chmod +x "$tmp_dir/bin/head"
+write_usb_devices '1234:5678:Generic USB Device'
+status=0
+PATH="$tmp_dir/bin:$PATH" bounded_detection || status=$?
+(( status == 1 )) || fail "a stalled value read reaches its own deadline" "$status"
+write_usb_devices '27c6:1234'
+PATH="$tmp_dir/bin:$PATH" bounded_detection || fail "a stalled value read preserves USB fallback"
+rm "$tmp_dir/bin/head" "$guard"
+unset BLOCKED_VALUE REAL_HEAD
+pass "value guards reject blocking, oversized and NUL-containing values without hiding USB readers"
+
 # A platform file that matches nothing never hides a USB reader on the same
 # machine: the USB scan still runs after it.
 write_usb_devices '1234:5678:Goodix Fingerprint USB Device'
