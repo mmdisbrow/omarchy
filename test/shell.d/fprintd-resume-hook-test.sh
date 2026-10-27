@@ -72,6 +72,13 @@ printf '# fixture fingerprint stack\n' >"$OMARCHY_LOCK_FINGERPRINT_PAM"
 cat >"$mock_bin/sudo" <<'SHIM'
 #!/bin/bash
 set -uo pipefail
+if [[ ${TEST_RESUME_SUDO_FAILURE:-0} == 1 ]]; then
+  exit 1
+fi
+if [[ ${TEST_RESUME_SUDO_FAIL_ONCE:-0} == 1 && ! -e $TEST_RESUME_SUDO_MARKER ]]; then
+  : >"$TEST_RESUME_SUDO_MARKER"
+  exit 1
+fi
 if [[ ${TEST_RESUME_PROBE_FAILURE:-0} == 1 && $1 == /usr/bin/python3 ]]; then
   # Keep the path inaccessible even at the boundary: the real lstat must
   # report EACCES, which cannot be interpreted as permission to install.
@@ -157,6 +164,33 @@ chmod 700 "$private_dir"
   fail "an unknown protected-path state must not install or reload"
 pass "an unavailable privileged lookup does not authorize writes"
 export TEST_RESUME_PROBE_FAILURE=0
+
+# The prerequisite itself is protected, so its state must be classified by
+# the same authority that will install the recovery files.
+export OMARCHY_LOCK_FINGERPRINT_PAM="$private_dir/lock-pam"
+printf '# protected fixture stack\n' >"$OMARCHY_LOCK_FINGERPRINT_PAM"
+chmod 000 "$private_dir"
+run_apply
+chmod 700 "$private_dir"
+[[ -x $OMARCHY_FPRINTD_RESUME_DST && -f $OMARCHY_FPRINTD_STOP_TIMEOUT_DST ]] ||
+  fail "a protected PAM prerequisite permits installation"
+rm "$OMARCHY_FPRINTD_RESUME_DST" "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST" "$OMARCHY_LOCK_FINGERPRINT_PAM"
+chmod 000 "$private_dir"
+run_apply
+chmod 700 "$private_dir"
+[[ ! -e $OMARCHY_FPRINTD_RESUME_DST && ! -e $OMARCHY_FPRINTD_STOP_TIMEOUT_DST && ! -s $call_log ]] ||
+  fail "a confirmed absent prerequisite does not install"
+printf '# protected fixture stack\n' >"$OMARCHY_LOCK_FINGERPRINT_PAM"
+chmod 000 "$private_dir"
+export TEST_RESUME_SUDO_FAIL_ONCE=1 TEST_RESUME_SUDO_MARKER="$tmpdir/first-sudo-failed"
+if run_apply; then fail "first sudo failure must not be classified as absence"; fi
+[[ -e $TEST_RESUME_SUDO_MARKER ]] || fail "the first sudo call must have failed"
+export TEST_RESUME_SUDO_FAIL_ONCE=0
+chmod 700 "$private_dir"
+[[ ! -e $OMARCHY_FPRINTD_RESUME_DST && ! -e $OMARCHY_FPRINTD_STOP_TIMEOUT_DST && ! -s $call_log ]] ||
+  fail "a failed prerequisite lookup leaves recovery pending"
+pass "protected and absent PAM prerequisites and failed sudo are distinguished"
+export OMARCHY_LOCK_FINGERPRINT_PAM="$tmpdir/lock-pam"
 
 chmod 000 "$private_dir"
 run_apply --reload-only

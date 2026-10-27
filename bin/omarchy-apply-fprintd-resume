@@ -62,7 +62,15 @@ stop_timeout_dst="${OMARCHY_FPRINTD_STOP_TIMEOUT_DST:-/etc/systemd/system/fprint
 lock_pam="${OMARCHY_LOCK_FINGERPRINT_PAM:-/etc/pam.d/omarchy-lock-fingerprint}"
 
 if ! $reload_only; then
-  [[ -f $lock_pam ]] || exit 0
+  if ! pam_state=$(file_state "$lock_pam"); then
+    echo "Could not inspect fingerprint PAM configuration." >&2
+    exit 1
+  fi
+  case $pam_state in
+    file) ;;
+    absent) exit 0 ;;
+    *) echo "Fingerprint PAM configuration is not a regular file." >&2; exit 1 ;;
+  esac
   install_missing "$hook_src" "$hook_dst" 755
   install_missing "$stop_timeout_src" "$stop_timeout_dst" 644
 fi
