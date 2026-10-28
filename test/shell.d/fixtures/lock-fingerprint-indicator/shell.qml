@@ -115,6 +115,8 @@ ShellRoot {
 
         var input = findByObjectName(view, "passwordInput")
         var status = findByObjectName(view, "authenticationIndicator")
+        var statusText = findByObjectName(view, "authenticationStatusText")
+        root.assertTrue(statusText !== null, "readable status supplements the icons")
         root.assertTrue(input !== null && status !== null, "password input and status are accessible")
         if (input && status) {
           view.passwordText = ""
@@ -127,11 +129,26 @@ ShellRoot {
           view.authenticatingPassword = true
           root.assertTrue(status.text !== readyGlyph && status.Accessible.name !== readyName && !input.enabled,
             "checking is distinguishable while input is temporarily disabled")
+          if (statusText) root.assertTrue(statusText.visible && statusText.text === status.Accessible.name,
+            "checking remains visibly readable")
+          view.passwordText = "fake-password-under-test"
+          if (statusText) root.assertTrue(statusText.visible && statusText.text === status.Accessible.name && statusText.text.indexOf(view.passwordText) < 0,
+            "a submitted nonempty password keeps checking feedback readable without exposing its contents")
+          view.passwordText = ""
           view.authenticatingPassword = false
-          view.failureMessage = "Authentication failed"
+          view.failureMessage = "Authentication failed (2)"
           root.assertTrue(status.text !== readyGlyph && status.Accessible.name === view.failureMessage,
             "failure remains available to assistive technology")
+          if (statusText) root.assertTrue(statusText.visible && statusText.text === view.failureMessage,
+            "the failure and attempt count remain visibly readable")
+          view.failureMessage = ""
+          view.fingerprintUnavailable = true
+          if (statusText) root.assertTrue(statusText.visible && statusText.text === indicator.Accessible.name,
+            "the unavailable reader explanation remains visibly readable")
+          view.fingerprintUnavailable = false
+          view.failureMessage = "Authentication failed (2)"
           input.insert(0, "test")
+          if (statusText) root.assertTrue(!statusText.visible, "typing hides the obsolete status text")
           root.assertTrue(view.passwordText === "test" && view.failureMessage === "" && !status.visible,
             "typing remains usable and replaces the failure indicator with password dots")
         }

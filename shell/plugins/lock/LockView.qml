@@ -242,5 +242,23 @@ Item {
         verticalAlignment: Text.AlignVCenter
       }
     }
+
+    Text {
+      objectName: "authenticationStatusText"
+      anchors.top: inputField.bottom
+      anchors.topMargin: 12
+      anchors.horizontalCenter: inputField.horizontalCenter
+      width: Math.max(0, Math.min(parent.width - 32, inputField.width * 1.5))
+      text: root.authenticatingPassword ? Commons.I18n.t("lock.checking")
+        : (root.failureMessage.length > 0 ? root.failureMessage
+        : (root.fingerprintUnavailable ? Commons.I18n.t("lock.fingerprintUnavailable") : root.placeholderText))
+      visible: root.authenticatingPassword || passwordInput.text.length === 0 || root.fingerprintUnavailable
+      textFormat: Text.PlainText
+      wrapMode: Text.WordWrap
+      horizontalAlignment: Text.AlignHCenter
+      color: root.failureMessage.length > 0 || root.fingerprintUnavailable ? Commons.Color.lock.textError : Commons.Color.lock.text
+      font.family: Style.font.family
+      font.pixelSize: Style.font.body
+    }
   }
 }
