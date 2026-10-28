@@ -246,18 +246,92 @@ ShellRoot {
     }
   }
 
+  property var probeService: null
+  property var probeProcess: null
+  property int probePhase: 0
+  property double probeStartedAt: 0
+
+  function finish() {
+    probeDeadline.stop()
+    if (probeService) {
+      probeService.lockRequested = false
+      probeService.resetAuthenticationState()
+      probeService.destroy()
+      probeService = null
+    }
+    var payload = JSON.stringify({ ok: failures.length === 0, checks: checks, failures: failures })
+    var quoted = "'" + payload.replace(/'/g, "'\\''") + "'"
+    Quickshell.execDetached(["bash", "-c", "printf '%s' " + quoted + " > \"$1\"", "_", resultPath])
+  }
+
+  function startDeadlineProbe() {
+    var component = Qt.createComponent("file://" + Quickshell.env("OMARCHY_QML_PROBE_SERVICE"), Component.PreferSynchronous)
+    if (component.status !== Component.Ready) throw new Error(component.errorString())
+    probeService = component.createObject(host, { omarchyPath: rootPath })
+    if (!probeService) throw new Error(component.errorString())
+    var objects = probeService.data || []
+    for (var i = 0; i < objects.length; i++) {
+      if (objects[i].command && String(objects[i].command).indexOf("fprintd-list") >= 0) probeProcess = objects[i]
+    }
+    if (!probeProcess) throw new Error("Missing production discovery Process")
+    probeProcess.running = false
+    probeSettle.start()
+  }
+
+  Timer {
+    id: probeSettle
+    interval: 100
+    onTriggered: {
+      root.probeService.fingerprintConfigured = true
+      var command = root.probeProcess.command
+      command[2] = "export OMARCHY_TIMEOUT_CHECK=1; " + command[2]
+      root.probeProcess.command = command
+      root.probeProcess.exited.connect(function(exitCode) {
+        Qt.callLater(function() {
+          try {
+            if (root.probePhase === 1) {
+              root.check(exitCode === 124 || exitCode === 137, "stalled discovery exits through the production timeout")
+              root.check(Date.now() - root.probeStartedAt >= 4500, "the real discovery deadline is exercised")
+              root.check(root.probeService.fingerprintConfigured, "timed-out partial output preserves known enrollment through onExited")
+              root.probePhase = 2
+              root.probeService.refreshFingerprintStatus()
+            } else if (root.probePhase === 2) {
+              root.check(exitCode === 0 && !root.probeService.fingerprintConfigured, "a later discovery retries and applies a definitive result")
+              root.finish()
+            }
+          } catch (error) {
+            root.failures.push(String(error))
+            root.finish()
+          }
+        })
+      })
+      root.probePhase = 1
+      root.probeStartedAt = Date.now()
+      probeDeadline.start()
+      root.probeService.refreshFingerprintStatus()
+    }
+  }
+
+  Timer {
+    id: probeDeadline
+    interval: 8000
+    onTriggered: {
+      root.failures.push("stalled discovery did not finish and retry within its deadline")
+      root.finish()
+    }
+  }
+
   Timer {
     interval: 1
     running: true
     onTriggered: {
       try {
         root.run()
+        root.startDeadlineProbe()
       } catch (error) {
         root.failures.push(String(error))
+        root.finish()
       }
-      var payload = JSON.stringify({ ok: root.failures.length === 0, checks: root.checks, failures: root.failures })
-      var quoted = "'" + payload.replace(/'/g, "'\\''") + "'"
-      Quickshell.execDetached(["bash", "-c", "printf '%s' " + quoted + " > \"$1\"", "_", root.resultPath])
     }
   }
 }
