@@ -362,6 +362,67 @@ for result in ' - #0: right-index-finger' 'User alice has no fingers enrolled' '
 done
 pass "custom authentication and recovery survive enrolled, empty and unavailable probes"
 
+# Recovery is customized on its own. A managed fingerprint PAM file must not
+# overwrite or delete it, and a stock sibling stays managed.
+rm -f "$fingerprint_pam" "$password_pam" \
+  "$test_tmp/system-sleep/fprintd-resume" \
+  "$test_tmp/fprintd.service.d/10-stop-timeout.conf"
+TEST_FPRINTD_OUTPUT=' - #0: right-index-finger' \
+  run_as_root "$patched_helper" "restore managed enrollment before custom recovery"
+cp "$fingerprint_pam" "$test_tmp/managed-fingerprint"
+printf '# custom hook\n' >"$test_tmp/system-sleep/fprintd-resume"
+printf '# custom timeout\n' >"$test_tmp/fprintd.service.d/10-stop-timeout.conf"
+rm -f "$fingerprint_pam"
+TEST_FPRINTD_OUTPUT=' - #0: right-index-finger' \
+  run_as_root "$patched_helper" "enrolled probe keeps custom recovery beside managed PAM"
+[[ $(<"$test_tmp/system-sleep/fprintd-resume") == '# custom hook' ]] ||
+  fail "enrolled probe overwrites a custom resume hook when PAM is managed"
+[[ $(<"$test_tmp/fprintd.service.d/10-stop-timeout.conf") == '# custom timeout' ]] ||
+  fail "enrolled probe overwrites a custom stop timeout when PAM is managed"
+cmp -s "$fingerprint_pam" "$test_tmp/managed-fingerprint" ||
+  fail "managed fingerprint PAM is still written beside custom recovery"
+TEST_FPRINTD_OUTPUT='User alice has no fingers enrolled' \
+  run_as_root "$patched_helper" "empty probe keeps custom recovery beside managed PAM"
+[[ $(<"$test_tmp/system-sleep/fprintd-resume") == '# custom hook' ]] ||
+  fail "empty enrollment removes a custom resume hook when PAM is managed"
+[[ $(<"$test_tmp/fprintd.service.d/10-stop-timeout.conf") == '# custom timeout' ]] ||
+  fail "empty enrollment removes a custom stop timeout when PAM is managed"
+[[ ! -e $fingerprint_pam ]] ||
+  fail "empty enrollment still removes managed fingerprint PAM when recovery is custom"
+
+# One custom recovery file does not freeze its stock sibling.
+cp "$hook_source" "$test_tmp/system-sleep/fprintd-resume"
+TEST_FPRINTD_OUTPUT='User alice has no fingers enrolled' \
+  run_as_root "$patched_helper" "empty probe removes a stock hook beside a custom timeout"
+[[ ! -e $test_tmp/system-sleep/fprintd-resume ]] ||
+  fail "empty enrollment removes a stock resume hook beside a custom stop timeout"
+[[ $(<"$test_tmp/fprintd.service.d/10-stop-timeout.conf") == '# custom timeout' ]] ||
+  fail "empty enrollment keeps a custom stop timeout beside a stock resume hook"
+printf '# custom hook\n' >"$test_tmp/system-sleep/fprintd-resume"
+rm -f "$test_tmp/fprintd.service.d/10-stop-timeout.conf"
+TEST_FPRINTD_OUTPUT=' - #0: right-index-finger' \
+  run_as_root "$patched_helper" "enrolled probe installs a stock timeout beside a custom hook"
+[[ $(<"$test_tmp/system-sleep/fprintd-resume") == '# custom hook' ]] ||
+  fail "a custom resume hook survives beside a stock stop timeout"
+cmp -s "$test_tmp/fprintd.service.d/10-stop-timeout.conf" "$timeout_source" ||
+  fail "a stock stop timeout is still installed beside a custom resume hook"
+
+# A recovery symlink is configuration, and install must not replace it.
+rm -f "$test_tmp/system-sleep/fprintd-resume"
+printf 'kept\n' >"$test_tmp/custom-hook-target"
+ln -s "$test_tmp/custom-hook-target" "$test_tmp/system-sleep/fprintd-resume"
+for result in ' - #0: right-index-finger' 'User alice has no fingers enrolled'; do
+  TEST_FPRINTD_OUTPUT="$result" \
+    run_as_root "$patched_helper" "custom recovery symlink survives the probe"
+  [[ -L $test_tmp/system-sleep/fprintd-resume && $(<"$test_tmp/custom-hook-target") == 'kept' ]] ||
+    fail "does not replace a custom resume hook symlink"
+done
+rm -f "$test_tmp/system-sleep/fprintd-resume" "$test_tmp/custom-hook-target" \
+  "$test_tmp/fprintd.service.d/10-stop-timeout.conf"
+TEST_FPRINTD_OUTPUT=' - #0: right-index-finger' \
+  run_as_root "$patched_helper" "restore managed recovery after custom recovery probes"
+pass "custom recovery survives enrolled and empty probes when PAM is managed"
+
 # Links are configuration too, and a dangling link must not create its target.
 rm "$fingerprint_pam" "$password_pam"
 cp "$test_tmp/custom-fingerprint" "$test_tmp/link-original"
