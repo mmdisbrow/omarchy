@@ -6,6 +6,7 @@ unit=/run/systemd/system/fprintd.service
 dropins=$unit.d
 sentinel=/run/systemd/system/touchid-ci-sentinel.service
 cleanup() {
+  sudo systemctl stop fprintd.service touchid-ci-sentinel.service || true
   sudo rm -rf "$unit" "$dropins" "$sentinel"
   sudo systemctl daemon-reload
   rm -rf "$fixture"
@@ -17,12 +18,14 @@ cat > "$fixture/unit" <<'UNIT'
 Description=Disposable fingerprint migration fixture
 [Service]
 Type=oneshot
+RemainAfterExit=yes
 ExecStart=/usr/bin/true
 UNIT
 sudo install -m644 "$fixture/unit" "$unit"
 sudo install -m644 "$fixture/unit" "$sentinel"
 sudo mkdir -m700 "$dropins"
 sudo systemctl daemon-reload
+sudo systemctl start fprintd.service touchid-ci-sentinel.service
 systemctl show fprintd.service --property=NeedDaemonReload --value
 export OMARCHY_LOCK_FINGERPRINT_PAM=$fixture/pam
 export OMARCHY_FPRINTD_STOP_TIMEOUT_DST=$dropins/10-stop-timeout.conf
