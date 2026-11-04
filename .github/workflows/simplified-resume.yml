@@ -1,0 +1,21 @@
+name: Simplified fingerprint resume migration
+on:
+  push:
+    branches: [ci/simplified-resume-x86]
+permissions:
+  contents: read
+jobs:
+  systemd:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Syntax and frozen migration checks
+        run: |
+          bash -n migrations/1793779758.sh
+          bash -n .github/scripts/simplified-resume-check
+          git diff HEAD~2 --exit-code -- migrations/1791125650.sh
+      - name: Exercise real systemd with protected fixture paths
+        run: bash .github/scripts/simplified-resume-check

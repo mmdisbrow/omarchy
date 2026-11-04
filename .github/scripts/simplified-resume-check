@@ -1,0 +1,72 @@
+#!/bin/bash
+set -euo pipefail
+migration=$PWD/migrations/1793779758.sh
+fixture=$(mktemp -d)
+unit=/run/systemd/system/fprintd.service
+dropins=$unit.d
+sentinel=/run/systemd/system/touchid-ci-sentinel.service
+cleanup() {
+  sudo rm -rf "$unit" "$dropins" "$sentinel"
+  sudo systemctl daemon-reload
+  rm -rf "$fixture"
+}
+trap cleanup EXIT
+[[ ! -e $unit && ! -e $dropins ]]
+cat > "$fixture/unit" <<'UNIT'
+[Unit]
+Description=Disposable fingerprint migration fixture
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/true
+UNIT
+sudo install -m644 "$fixture/unit" "$unit"
+sudo install -m644 "$fixture/unit" "$sentinel"
+sudo mkdir -m700 "$dropins"
+sudo systemctl daemon-reload
+systemctl show fprintd.service --property=NeedDaemonReload --value
+export OMARCHY_LOCK_FINGERPRINT_PAM=$fixture/pam
+export OMARCHY_FPRINTD_STOP_TIMEOUT_DST=$dropins/10-stop-timeout.conf
+printf '# fixture fingerprint configuration\n' > "$fixture/pam"
+printf '[Service]\nTimeoutStopSec=11s\n' > "$fixture/dropin"
+sudo install -m644 "$fixture/dropin" "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+[[ ! -f $OMARCHY_FPRINTD_STOP_TIMEOUT_DST ]]
+[[ $(systemctl show fprintd.service -p NeedDaemonReload --value) == yes ]]
+# The shipped migration must reproduce the missed reload, without installing.
+export OMARCHY_FPRINTD_RESUME_SRC=$fixture/no-hook-source
+export OMARCHY_FPRINTD_STOP_TIMEOUT_SRC=$fixture/no-dropin-source
+bash -euo pipefail migrations/1791125650.sh
+[[ $(systemctl show fprintd.service -p NeedDaemonReload --value) == yes ]]
+echo 'PASS: shipped migration misses the protected drop-in reload'
+bash -euo pipefail "$migration"
+[[ $(systemctl show fprintd.service -p NeedDaemonReload --value) == no ]]
+sudo cmp "$fixture/dropin" "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+echo 'PASS: replacement reloads real systemd and preserves custom content'
+# An unnecessary global reload would clear the other unit's stale state.
+systemctl show touchid-ci-sentinel.service -p NeedDaemonReload --value
+sleep 1
+printf '\n# changed sentinel\n' | sudo tee -a "$sentinel" >/dev/null
+[[ $(systemctl show touchid-ci-sentinel.service -p NeedDaemonReload --value) == yes ]]
+bash -euo pipefail "$migration"
+[[ $(systemctl show touchid-ci-sentinel.service -p NeedDaemonReload --value) == yes ]]
+echo 'PASS: current fingerprint unit does not cause another daemon reload'
+sudo rm "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+bash -euo pipefail "$migration"
+! sudo test -e "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+echo 'PASS: removed drop-in is not recreated'
+sudo ln -s "$fixture/missing-target" "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+bash -euo pipefail "$migration"
+sudo test -L "$OMARCHY_FPRINTD_STOP_TIMEOUT_DST"
+[[ ! -e $fixture/missing-target ]]
+echo 'PASS: dangling symlink and absent target are preserved'
+mkdir "$fixture/bin"
+printf '#!/bin/bash\nexit 99\n' > "$fixture/bin/sudo"
+chmod +x "$fixture/bin/sudo"
+if PATH="$fixture/bin:$PATH" bash -euo pipefail "$migration"; then
+  echo 'FAIL: privilege failure was swallowed' >&2
+  exit 1
+fi
+echo 'PASS: failed privilege elevation leaves migration unsuccessful'
+rm "$fixture/pam"
+PATH="$fixture/bin:$PATH" bash -euo pipefail "$migration"
+echo 'PASS: password-only installation exits without sudo'
+bash test/shell.d/fprintd-resume-hook-test.sh
