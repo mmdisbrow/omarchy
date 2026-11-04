@@ -38,8 +38,9 @@ jobs:
           git log -1 --format=fuller > "$RUNNER_TEMP/touchid-logs/composition.txt"
       - name: Prepare disposable x86 Arch environment
         run: |
+          sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
           docker run -d --privileged --name touchid -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/touchid-logs:/logs" -v "$RUNNER_TEMP/touchid-x86-tests:/run-tests:ro" -w /src archlinux:base-devel sleep infinity
-          docker exec touchid pacman -Syu --noconfirm --needed nodejs python jq ripgrep quickshell sway wtype bubblewrap dbus qt6-declarative qt6-svg qt6-5compat ttf-dejavu
+          docker exec touchid pacman -Syu --noconfirm --needed nodejs python lua jq ripgrep quickshell sway wtype bubblewrap dbus qt6-declarative qt6-svg qt6-5compat ttf-dejavu
           docker exec touchid useradd -m tester
           docker exec touchid chmod 777 /logs
           docker exec touchid bash -c 'uname -m; pacman -Q' > "$RUNNER_TEMP/touchid-logs/packages.txt"
