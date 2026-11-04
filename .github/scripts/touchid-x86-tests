@@ -1,0 +1,37 @@
+#!/bin/bash
+set -euo pipefail
+ulimit -c 0
+export XDG_RUNTIME_DIR
+XDG_RUNTIME_DIR=$(mktemp -d)
+chmod 700 "$XDG_RUNTIME_DIR"
+export WLR_BACKENDS=headless WLR_RENDERER=pixman WLR_LIBINPUT_NO_DEVICES=1
+export QT_QUICK_BACKEND=software
+printf 'output HEADLESS-1 mode 1280x800\nseat seat0 fallback true\n' > /tmp/sway-ci.conf
+sway -c /tmp/sway-ci.conf > /logs/sway.log 2>&1 &
+compositor=$!
+trap 'kill "$compositor" 2>/dev/null || true' EXIT
+for _ in {1..100}; do
+  sockets=("$XDG_RUNTIME_DIR"/wayland-*)
+  [[ -S ${sockets[0]} ]] && break
+  kill -0 "$compositor"
+  sleep 0.1
+done
+[[ -S ${sockets[0]} ]]
+export WAYLAND_DISPLAY=${sockets[0]}
+status=0
+for suite in hw-fingerprint apply-lock fprintd-resume-hook lock-fingerprint-retry lock-fingerprint-indicator lock-fingerprint-service hyprland-binding-conflicts; do
+  log=/logs/$suite.log
+  if timeout -k 5 180 bash "test/shell.d/$suite-test.sh" > "$log" 2>&1; then
+    if rg -q '# SKIP' "$log"; then
+      echo "FAIL: $suite skipped coverage"
+      status=1
+    else
+      echo "PASS: $suite"
+    fi
+  else
+    echo "FAIL: $suite"
+    status=1
+  fi
+  cat "$log"
+done
+exit "$status"

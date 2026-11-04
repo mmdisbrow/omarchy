@@ -1,0 +1,52 @@
+name: Touch ID x86 functional tests
+on:
+  push:
+    branches: [ci/touchid-x86]
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  fingerprint:
+    name: ${{ matrix.target.name }} on current quattro
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        target:
+          - {name: baseline, sha: 9b525a93513978a535289210621765d87bfe94a7}
+          - {name: pr-16836, sha: 0147c380218d5a454af9006340ea1a237b64529e}
+          - {name: pr-16837, sha: 53f1bc1b0ea2fb2486079e57d755d14154a29da9}
+          - {name: pr-16838, sha: 86a9f634079da217d3038294c5a0d221bbef1bc2}
+          - {name: pr-16839, sha: b92b30186a61beab6b0745917ee601b20a45193e}
+          - {name: pr-16840, sha: fa09e7e0eb9f9510086a478db0da5d09e59c7cea}
+          - {name: pr-16842, sha: 4032ad51f6dd77a86373f9a925126c77eb66ff4e}
+          - {name: pr-17143, sha: 26adead0099941e9f2055c11ee0ae464341ae90a}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Compose pinned PR head with pinned current upstream
+        env:
+          TARGET_SHA: ${{ matrix.target.sha }}
+        run: |
+          cp .github/scripts/touchid-x86-tests "$RUNNER_TEMP/touchid-x86-tests"
+          git fetch https://github.com/omacom/omarchy.git "$TARGET_SHA" 9b525a93513978a535289210621765d87bfe94a7
+          git checkout --detach "$TARGET_SHA"
+          git -c user.name=CI -c user.email=ci@localhost merge --no-edit 9b525a93513978a535289210621765d87bfe94a7
+          mkdir -p "$RUNNER_TEMP/touchid-logs"
+          git log -1 --format=fuller > "$RUNNER_TEMP/touchid-logs/composition.txt"
+      - name: Prepare disposable x86 Arch environment
+        run: |
+          docker run -d --privileged --name touchid -v "$GITHUB_WORKSPACE:/src:ro" -v "$RUNNER_TEMP/touchid-logs:/logs" -v "$RUNNER_TEMP/touchid-x86-tests:/run-tests:ro" -w /src archlinux:base-devel sleep infinity
+          docker exec touchid pacman -Syu --noconfirm --needed nodejs python jq ripgrep quickshell sway wtype bubblewrap dbus qt6-declarative qt6-svg qt6-5compat ttf-dejavu
+          docker exec touchid useradd -m tester
+          docker exec touchid chmod 777 /logs
+          docker exec touchid bash -c 'uname -m; pacman -Q' > "$RUNNER_TEMP/touchid-logs/packages.txt"
+      - name: Run fixtures as unprivileged user with private compositor
+        run: docker exec -u tester -e HOME=/home/tester touchid dbus-run-session bash /run-tests
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: touchid-x86-${{ matrix.target.name }}
+          path: ${{ runner.temp }}/touchid-logs
